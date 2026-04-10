@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv*/
+venv/
+*.egg-info/
+
+# Data & models (too large for GitHub)
+data/
+models/
+*.h5
+*.weights
+*.pt
+*.pth
+*.onnx
+*.tgz
+
+# HF cache
+.cache/
+.huggingface/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

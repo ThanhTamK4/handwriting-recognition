@@ -1,0 +1,10 @@
+torch
+torchvision
+transformers
+sentencepiece
+pillow
+opencv-python
+numpy
+streamlit>=1.20
+onnxruntime
+pyyaml
