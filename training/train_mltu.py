@@ -174,7 +174,7 @@ def main():
     width = 256  # 256 -> 64 timesteps after two stride-2 blocks; must be >= 2*max_label-1
     batch_size = 64
     learning_rate = 1e-3
-    train_epochs = 10
+    train_epochs = 30
     train_workers = 4
 
     # Write configs.yaml manually (inference only needs vocab/height/width).
