@@ -23,7 +23,7 @@ python -m venv .venv-train
 pip install -r training/requirements-train.txt
 ```
 
-## Train
+## Train (local)
 
 Make sure `data/IAM_Words/words.txt` and the extracted `data/IAM_Words/words/`
 tree exist (same layout the TrOCR recognizer uses).
@@ -33,12 +33,36 @@ python training/train_mltu.py
 ```
 
 Expected runtime:
-- **CPU:** multiple hours
-- **GPU (CUDA):** ~20–40 min
+- **CPU:** multiple hours (~20 min/epoch)
+- **GPU (CUDA):** ~20–40 min total
 
 Checkpoints, TensorBoard logs, and the final `model.onnx` + `configs.yaml` land
 in `models/mltu/`. Early stopping on validation CER typically ends training
 before epoch 50.
+
+## Train (Google Colab — recommended)
+
+Much faster: ~30 min for 50 epochs on Colab's free GPU.
+
+1. Upload `data/IAM_Words/` to your Google Drive (one-time).
+2. Open `training/train_mltu_colab.ipynb` in Colab (or via VS Code Colab extension).
+3. Edit the `DATA_DIR` and `OUT_DIR` paths in the Config cell to match your Drive.
+4. Run all cells. Training outputs `model.onnx` + `configs.yaml` to Drive.
+5. Copy the two files from Drive to your local `models/mltu/`.
+6. Restart Streamlit and select "mltu CRNN" in the sidebar.
+
+### Data augmentation
+
+The training pipeline (both local and Colab) applies random augmentations to
+training images only (not validation):
+
+- **RandomBrightness** — lightens/darkens by up to ±100 (30% chance)
+- **RandomRotate** — tilts ±5° (30% chance)
+- **RandomErodeDilate** — thins/thickens strokes (30% chance)
+- **RandomGaussianBlur** — slight blur (20% chance)
+- **RandomElasticTransform** — local warping for handwriting variation (20% chance)
+
+This reduces overfitting and typically closes the train/val CER gap by 2–3%.
 
 ## Verify
 
