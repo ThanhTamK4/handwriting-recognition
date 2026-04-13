@@ -103,7 +103,13 @@ class MltuRecognizer:
 
     def _ctc_greedy_decode(self, logits: np.ndarray) -> tuple[str, float]:
         """logits shape: (timesteps, num_classes). Returns (text, mean_confidence)."""
-        probs = _softmax(logits, axis=-1)
+        # Model output already has softmax activation, so logits are probabilities.
+        # Only apply softmax if values don't already sum to ~1.
+        row_sums = logits.sum(axis=-1)
+        if np.allclose(row_sums, 1.0, atol=0.1):
+            probs = logits
+        else:
+            probs = _softmax(logits, axis=-1)
         best = probs.argmax(axis=-1)
         best_probs = probs.max(axis=-1)
 
