@@ -21,7 +21,8 @@ from PIL import Image, ImageDraw
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.preprocess import PreprocessOptions, preprocess  # noqa: E402
-from src.recognizer import PredictionResult, Recognizer, line_boxes  # noqa: E402
+from src.recognizer import PredictionResult, Recognizer  # noqa: E402
+from src.segment import line_polygons, word_polygons  # noqa: E402
 
 TROCR_LABEL = "TrOCR (base handwritten)"
 MLTU_LABEL = "mltu CRNN (IAM words)"
@@ -39,6 +40,13 @@ def _load_mltu():
     return MltuRecognizer()
 
 
+@st.cache_resource(show_spinner="Loading English dictionary...")
+def _load_corrector():
+    from src.postprocess import WordCorrector
+
+    return WordCorrector()
+
+
 def get_recognizer(choice: str):
     if choice == MLTU_LABEL:
         return _load_mltu()
@@ -46,14 +54,24 @@ def get_recognizer(choice: str):
 
 
 def draw_line_overlay(image: Image.Image) -> Image.Image:
-    boxes = line_boxes(image)
-    if not boxes:
+    """Overlay red line polygons + green word polygons on the original image."""
+    l_polys = line_polygons(image)
+    w_polys = word_polygons(image)
+    if not l_polys and not w_polys:
         return image
     overlay = image.convert("RGB").copy()
     draw = ImageDraw.Draw(overlay)
-    w = overlay.width
-    for y0, y1 in boxes:
-        draw.rectangle([(0, y0), (w - 1, y1)], outline=(255, 0, 0), width=3)
+    for line in w_polys:
+        for poly in line:
+            pts = [tuple(map(int, p)) for p in poly]
+            draw.polygon(pts, outline=(0, 180, 0))
+    for poly in l_polys:
+        pts = [tuple(map(int, p)) for p in poly]
+        draw.polygon(pts, outline=(255, 0, 0))
+        # Thicken line outline by re-drawing with slight offsets.
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            shifted = [(x + dx, y + dy) for x, y in pts]
+            draw.polygon(shifted, outline=(255, 0, 0))
     return overlay
 
 
@@ -65,18 +83,48 @@ def confidence_badge(conf: float) -> str:
     return f"🔴 **{conf:.0%}**"
 
 
+def _highlight_diff(raw: str, corrected: str) -> str:
+    """Return markdown with per-word differences highlighted in corrected text."""
+    raw_tokens = raw.split()
+    corr_tokens = corrected.split()
+    out = []
+    for i, tok in enumerate(corr_tokens):
+        if i >= len(raw_tokens) or raw_tokens[i] != tok:
+            out.append(f"**:green[{tok}]**")
+        else:
+            out.append(tok)
+    return " ".join(out)
+
+
 def render_result(result: PredictionResult, key_prefix: str) -> None:
     if not result.text:
         st.warning("No text detected. Try preprocessing or a clearer image.")
         return
     st.subheader("Prediction")
     st.markdown(f"Confidence: {confidence_badge(result.confidence)}")
-    st.code(result.text, language=None)  # built-in copy button
+
+    if result.corrected and result.raw_text and result.raw_text != result.text:
+        c_raw, c_corr = st.columns(2)
+        with c_raw:
+            st.caption("Raw (CRNN output)")
+            st.code(result.raw_text, language=None)
+        with c_corr:
+            st.caption("Corrected (dictionary)")
+            st.code(result.text, language=None)
+        st.markdown(
+            "Changed words: " + _highlight_diff(result.raw_text, result.text)
+        )
+    else:
+        st.code(result.text, language=None)  # built-in copy button
+
     if result.line_results:
         with st.expander("Per-line breakdown"):
             for i, lr in enumerate(result.line_results, 1):
+                line_display = lr.text
+                if lr.corrected and lr.raw_text and lr.raw_text != lr.text:
+                    line_display = f"{lr.raw_text}  →  {lr.text}"
                 st.markdown(
-                    f"**Line {i}** &middot; {confidence_badge(lr.confidence)} &middot; `{lr.text}`",
+                    f"**Line {i}** &middot; {confidence_badge(lr.confidence)} &middot; `{line_display}`",
                     unsafe_allow_html=True,
                 )
 
@@ -88,6 +136,7 @@ def run_pipeline(
     apply_preproc: bool,
     opts: PreprocessOptions,
     key_prefix: str,
+    apply_correction: bool = False,
 ) -> None:
     try:
         processed = preprocess(image, opts) if apply_preproc else image
@@ -118,11 +167,25 @@ def run_pipeline(
         st.error(f"Could not load model: {e}")
         return
 
+    corrector = None
+    if apply_correction and model_choice == MLTU_LABEL:
+        try:
+            corrector = _load_corrector()
+        except Exception as e:  # pragma: no cover
+            st.warning(f"Could not load dictionary corrector: {e}")
+
     try:
         with st.spinner("Recognizing..."):
-            result = (
-                rec.predict_lines(processed) if multiline else rec.predict(processed)
-            )
+            if corrector is not None:
+                result = (
+                    rec.predict_lines(processed, corrector=corrector)
+                    if multiline
+                    else rec.predict(processed, corrector=corrector)
+                )
+            else:
+                result = (
+                    rec.predict_lines(processed) if multiline else rec.predict(processed)
+                )
     except Exception as e:  # pragma: no cover
         st.error(f"Recognition failed: {e}")
         return
@@ -146,6 +209,16 @@ with st.sidebar:
     multiline = st.checkbox(
         "Multi-line mode", value=False, help="Split image into horizontal lines."
     )
+    is_mltu = model_choice == MLTU_LABEL
+    apply_correction = st.checkbox(
+        "English-dictionary correction",
+        value=False,
+        disabled=not is_mltu,
+        help=(
+            "Snap out-of-vocabulary CRNN output to the nearest English word, "
+            "weighted by CTC per-character confidence. mltu backend only."
+        ),
+    )
     st.divider()
     st.subheader("Preprocessing")
     apply_preproc = st.checkbox("Apply preprocessing", value=False)
@@ -168,7 +241,7 @@ with upload_tab:
             st.error(f"Could not open image: {e}")
         else:
             st.image(image, caption="Input", use_container_width=True)
-            run_pipeline(image, model_choice, multiline, apply_preproc, opts, key_prefix="upload")
+            run_pipeline(image, model_choice, multiline, apply_preproc, opts, key_prefix="upload", apply_correction=apply_correction)
 
 with webcam_tab:
     snapshot = st.camera_input("Take a photo of handwriting")
@@ -178,4 +251,4 @@ with webcam_tab:
         except Exception as e:
             st.error(f"Could not read snapshot: {e}")
         else:
-            run_pipeline(image, model_choice, multiline, apply_preproc, opts, key_prefix="webcam")
+            run_pipeline(image, model_choice, multiline, apply_preproc, opts, key_prefix="webcam", apply_correction=apply_correction)

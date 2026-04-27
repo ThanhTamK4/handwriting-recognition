@@ -42,11 +42,25 @@ def main():
     ap.add_argument("--n", type=int, default=20)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--model", choices=["trocr", "mltu"], default="trocr")
+    ap.add_argument(
+        "--correct",
+        action="store_true",
+        help="Run English-dictionary correction on mltu output and print raw vs corrected.",
+    )
     args = ap.parse_args()
 
     samples = load_samples()
     random.Random(args.seed).shuffle(samples)
     samples = samples[: args.n]
+
+    corrector = None
+    if args.correct:
+        if args.model != "mltu":
+            print("--correct is only supported for --model mltu; ignoring.")
+        else:
+            from .postprocess import WordCorrector
+
+            corrector = WordCorrector()
 
     if args.model == "mltu":
         from .mltu_recognizer import MltuRecognizer
@@ -56,15 +70,40 @@ def main():
         from .recognizer import Recognizer
 
         rec = Recognizer()
-    correct = 0
+
+    raw_correct = 0
+    corrected_correct = 0
     for path, truth in samples:
-        result = rec.predict(Image.open(path))
+        truth = truth.strip()
+        if corrector is not None:
+            result = rec.predict(Image.open(path), corrector=corrector)
+        else:
+            result = rec.predict(Image.open(path))
         pred = result.text
-        ok = pred == truth.strip()
-        correct += int(ok)
-        mark = "OK " if ok else "   "
-        print(f"{mark} truth={truth!r:25} pred={pred!r:25} conf={result.confidence:.2f}")
-    print(f"\n{correct}/{len(samples)} exact-match")
+        raw_pred = result.raw_text if result.raw_text is not None else pred
+        raw_ok = raw_pred == truth
+        corr_ok = pred == truth
+        raw_correct += int(raw_ok)
+        corrected_correct += int(corr_ok)
+        if corrector is not None:
+            tag = "++" if (corr_ok and not raw_ok) else (
+                "--" if (raw_ok and not corr_ok) else ("OK" if corr_ok else "  ")
+            )
+            print(
+                f"{tag} truth={truth!r:25} raw={raw_pred!r:25} "
+                f"corr={pred!r:25} conf={result.confidence:.2f}"
+            )
+        else:
+            mark = "OK " if corr_ok else "   "
+            print(f"{mark} truth={truth!r:25} pred={pred!r:25} conf={result.confidence:.2f}")
+
+    total = len(samples)
+    if corrector is not None:
+        print(f"\nraw:       {raw_correct}/{total} exact-match")
+        print(f"corrected: {corrected_correct}/{total} exact-match "
+              f"(delta {corrected_correct - raw_correct:+d})")
+    else:
+        print(f"\n{corrected_correct}/{total} exact-match")
 
 
 if __name__ == "__main__":

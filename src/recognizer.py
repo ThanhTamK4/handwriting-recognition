@@ -3,12 +3,12 @@
 Loads `microsoft/trocr-base-handwritten` once and exposes:
     Recognizer().predict(pil_image) -> PredictionResult
     Recognizer().predict_lines(pil_image) -> PredictionResult
-    line_boxes(pil_image) -> list of (y0, y1) tuples for preview overlays
+    line_polygons(pil_image) -> list of 4x2 int polygons for preview overlays
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -16,12 +16,10 @@ import torch
 from PIL import Image
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
-MODEL_NAME = "microsoft/trocr-base-handwritten"
+from .segment import line_polygons as _segment_line_polygons
+from .segment import split_lines as _segment_split_lines
 
-# Anything below this fraction of the brightest row is considered "background".
-LINE_THRESHOLD_RATIO = 0.05
-MIN_LINE_HEIGHT = 10
-LINE_PAD = 6
+MODEL_NAME = "microsoft/trocr-base-handwritten"
 
 
 @dataclass
@@ -29,6 +27,8 @@ class PredictionResult:
     text: str
     confidence: float  # 0..1, mean per-token probability
     line_results: List["PredictionResult"] = field(default_factory=list)
+    raw_text: Optional[str] = None  # uncorrected text if post-processing ran
+    corrected: bool = False  # True iff `raw_text` differs from `text`
 
     def __str__(self) -> str:  # convenience for st.text_area
         return self.text
@@ -60,7 +60,7 @@ class Recognizer:
         return PredictionResult(text=text, confidence=confidence)
 
     def predict_lines(self, image: Image.Image) -> PredictionResult:
-        crops = _line_crops(image)
+        crops = [Image.fromarray(c) for c in _segment_split_lines(image)]
         if not crops:
             return self.predict(image)
         line_results = [self.predict(c) for c in crops]
@@ -72,58 +72,29 @@ class Recognizer:
 
 # ---------- helpers ----------
 
+def line_polygons(image: Image.Image) -> List[np.ndarray]:
+    """Return list of 4x2 int polygons for line overlay drawing."""
+    return _segment_line_polygons(image)
+
+
+# Backwards-compat shim: older callers imported `line_boxes` expecting (y0, y1).
 def line_boxes(image: Image.Image) -> List[Tuple[int, int]]:
-    """Return list of (y0, y1) horizontal-line spans for preview overlay."""
-    rgb = np.array(image.convert("RGB"))
-    return _line_spans(rgb)
-
-
-def _line_crops(image: Image.Image) -> List[Image.Image]:
-    rgb = np.array(image.convert("RGB"))
-    spans = _line_spans(rgb)
-    return [Image.fromarray(rgb[y0:y1, :]) for y0, y1 in spans]
-
-
-def _line_spans(rgb: np.ndarray) -> List[Tuple[int, int]]:
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    proj = bw.sum(axis=1)
-    if proj.max() == 0:
-        return []
-    threshold = proj.max() * LINE_THRESHOLD_RATIO
-
-    spans: List[Tuple[int, int]] = []
-    in_line = False
-    start = 0
-    h = rgb.shape[0]
-    for y, val in enumerate(proj):
-        if val > threshold and not in_line:
-            in_line = True
-            start = y
-        elif val <= threshold and in_line:
-            in_line = False
-            if y - start > MIN_LINE_HEIGHT:
-                spans.append((max(0, start - LINE_PAD), min(h, y + LINE_PAD)))
-    if in_line and h - start > MIN_LINE_HEIGHT:
-        spans.append((max(0, start - LINE_PAD), h))
-    return spans
+    polys = _segment_line_polygons(image)
+    return [(int(p[:, 1].min()), int(p[:, 1].max())) for p in polys]
 
 
 def _is_blank(image: Image.Image) -> bool:
     arr = np.array(image.convert("L"))
     if arr.size == 0:
         return True
-    # Image is blank if foreground (dark) pixels < 0.1% of total.
     _, bw = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     foreground_ratio = (bw > 0).mean()
     return foreground_ratio < 0.001
 
 
 def _mean_token_probability(scores, sequences) -> float:
-    """Compute mean probability of the chosen tokens across generation steps."""
     if not scores:
         return 0.0
-    # `sequences` includes the BOS token at index 0; generated tokens start at index 1.
     gen_tokens = sequences[0, 1 : 1 + len(scores)]
     probs = []
     for step, logits in enumerate(scores):

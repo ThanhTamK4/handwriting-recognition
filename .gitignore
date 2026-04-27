@@ -30,3 +30,9 @@ Thumbs.db
 .idea/
 .DS_Store
 Thumbs.db
+CLAUDE.md
+
+# Obsidian workspace state at repo root (project root opened as vault).
+# Note: docs/obsidian-vault/.obsidian/ is intentionally tracked — it carries
+# the graph color groups and plugin config that make the vault useful.
+/.obsidian/

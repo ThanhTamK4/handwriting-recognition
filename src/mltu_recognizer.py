@@ -17,6 +17,7 @@ from PIL import Image
 
 from .recognizer import PredictionResult
 from .segment import split_lines_words
+from .postprocess import WordCorrector
 
 DEFAULT_MODEL_DIR = Path(__file__).resolve().parents[1] / "models" / "mltu"
 
@@ -43,15 +44,33 @@ class MltuRecognizer:
 
     # ---------- public API ----------
 
-    def predict(self, image: Image.Image | np.ndarray) -> PredictionResult:
+    def predict(
+        self,
+        image: Image.Image | np.ndarray,
+        corrector: Optional[WordCorrector] = None,
+    ) -> PredictionResult:
         prepared = self._prepare(image)
         if prepared is None:
             return PredictionResult(text="", confidence=0.0)
         logits = self.session.run(None, {self.input_name: prepared[None, ...]})[0][0]
-        text, conf = self._ctc_greedy_decode(logits)
+        text, conf, char_confs = self._ctc_greedy_decode(logits)
+        if corrector is not None and text:
+            corrected_text, flags = corrector.correct_text(text, [char_confs])
+            if any(flags):
+                return PredictionResult(
+                    text=corrected_text,
+                    confidence=conf,
+                    raw_text=text,
+                    corrected=True,
+                )
+            return PredictionResult(text=text, confidence=conf, raw_text=text)
         return PredictionResult(text=text, confidence=conf)
 
-    def predict_lines(self, image: Image.Image | np.ndarray) -> PredictionResult:
+    def predict_lines(
+        self,
+        image: Image.Image | np.ndarray,
+        corrector: Optional[WordCorrector] = None,
+    ) -> PredictionResult:
         lines = split_lines_words(image)
         line_results: List[PredictionResult] = []
         for word_crops in lines:
@@ -63,23 +82,55 @@ class MltuRecognizer:
             logits_batch = self.session.run(None, {self.input_name: arr})[0]
             word_texts: List[str] = []
             word_confs: List[float] = []
+            word_char_confs: List[List[float]] = []
             for logits in logits_batch:
-                t, c = self._ctc_greedy_decode(logits)
+                t, c, cc = self._ctc_greedy_decode(logits)
                 if t:
                     word_texts.append(t)
                     word_confs.append(c)
-            if word_texts:
-                line_results.append(
-                    PredictionResult(
-                        text=" ".join(word_texts),
-                        confidence=float(np.mean(word_confs)),
+                    word_char_confs.append(cc)
+            if not word_texts:
+                continue
+
+            raw_line = " ".join(word_texts)
+            line_conf = float(np.mean(word_confs))
+            if corrector is not None:
+                corrected_line, flags = corrector.correct_text(raw_line, word_char_confs)
+                if any(flags):
+                    line_results.append(
+                        PredictionResult(
+                            text=corrected_line,
+                            confidence=line_conf,
+                            raw_text=raw_line,
+                            corrected=True,
+                        )
                     )
+                    continue
+                line_results.append(
+                    PredictionResult(text=raw_line, confidence=line_conf, raw_text=raw_line)
+                )
+            else:
+                line_results.append(
+                    PredictionResult(text=raw_line, confidence=line_conf)
                 )
 
         text = "\n".join(r.text for r in line_results if r.text)
         confidence = (
             float(np.mean([r.confidence for r in line_results])) if line_results else 0.0
         )
+        if corrector is not None and line_results:
+            raw_joined = "\n".join(
+                (r.raw_text if r.raw_text is not None else r.text)
+                for r in line_results
+                if (r.raw_text or r.text)
+            )
+            return PredictionResult(
+                text=text,
+                confidence=confidence,
+                line_results=line_results,
+                raw_text=raw_joined,
+                corrected=any(r.corrected for r in line_results),
+            )
         return PredictionResult(text=text, confidence=confidence, line_results=line_results)
 
     # ---------- helpers ----------
@@ -101,8 +152,13 @@ class MltuRecognizer:
         arr = cv2.resize(arr, (self.width, self.height))
         return arr.astype(np.float32)  # model has a /255 Lambda layer inside
 
-    def _ctc_greedy_decode(self, logits: np.ndarray) -> tuple[str, float]:
-        """logits shape: (timesteps, num_classes). Returns (text, mean_confidence)."""
+    def _ctc_greedy_decode(
+        self, logits: np.ndarray
+    ) -> tuple[str, float, List[float]]:
+        """logits shape: (timesteps, num_classes).
+
+        Returns (text, mean_confidence, per_character_confidences).
+        """
         # Model output already has softmax activation, so logits are probabilities.
         # Only apply softmax if values don't already sum to ~1.
         row_sums = logits.sum(axis=-1)
@@ -124,7 +180,7 @@ class MltuRecognizer:
             prev = idx
         text = "".join(chars)
         conf = float(np.mean(confidences)) if confidences else 0.0
-        return text, conf
+        return text, conf, confidences
 
 
 def _softmax(x: np.ndarray, axis: int = -1) -> np.ndarray:
