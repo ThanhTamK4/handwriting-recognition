@@ -24,6 +24,18 @@ Head-to-head on 20 IAM word samples.
 
 TrOCR still wins on real multi-line paragraphs or unseen writers. mltu wins on IAM-style isolated word crops.
 
+## Three-backend split (current state)
+
+After the live demo round, the UI ships with three options:
+
+| Backend | When to pick it |
+|---|---|
+| **TrOCR (base handwritten)** | Cursive multi-line pages, unseen writers, real handwriting |
+| **TrOCR (printed)** | Printed/scanned documents — same architecture, `microsoft/trocr-base-printed` checkpoint |
+| **mltu CRNN (IAM words)** | Isolated IAM-style cursive words — fastest, highest exact-match on this eval |
+
+The English-dictionary correction post-processor is gated to the mltu backend only, since both TrOCR variants already use a transformer LM decoder.
+
 ## Related
 
-- [[eval_iam.py]], [[Inference Pipeline]]
+- [[eval_iam.py]], [[Inference Pipeline]], [[NLP Correction]]

@@ -10,7 +10,7 @@ The interactive frontend in [[streamlit_app.py]]. Only entry point the end-user 
 
 ## Panels
 
-- **Input** — file uploader (PNG/JPG) + webcam snapshot tab
+- **Input** — three tabs: file uploader (PNG/JPG), drawable canvas (in-tree HTML5 component at `app/components/handwriting_canvas/`), URL / clipboard paste (`streamlit-paste-button` + URL text input)
 - **Preprocessing toggles** — perspective, deskew, denoise, CLAHE, binarize (all from [[preprocess.py]])
 - **Mode switch** — single word vs multi-line
 - **Backend switch** — [[TrOCR Recognizer]] or [[mltu CRNN Recognizer]]

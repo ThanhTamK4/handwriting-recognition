@@ -20,9 +20,18 @@ import numpy as np
 from PIL import Image
 
 # --- tuning knobs ---
+# These constants were originally tuned for the cursive IAM dataset (continuous
+# strokes that merge into word blobs after a small dilation). Two were raised
+# after live testing showed phantom boxes on printed text — printed glyphs
+# disconnect per-letter, so dilation has to be more aggressive and tiny noise
+# components have to be filtered more strictly:
+#   - MIN_COMPONENT_AREA: 30 -> 80   (was keeping i-dots as separate clusters)
+#   - LINE_DILATE_KERNEL: (25,3) -> (35,3)  (printed words have wider gaps)
+# Verified on the IAM single-word eval (no regression from segmentation paths)
+# and on a printed multi-line test image (5 lines, no phantom boxes).
 WORD_DILATE_KERNEL = (15, 5)        # horizontal dilation to merge chars within a word
-LINE_DILATE_KERNEL = (25, 3)        # stronger horizontal dilation to group chars into line-level blobs
-MIN_COMPONENT_AREA = 30             # drop noise specks smaller than this
+LINE_DILATE_KERNEL = (35, 3)        # stronger horizontal dilation to group chars into line-level blobs
+MIN_COMPONENT_AREA = 80             # drop noise specks smaller than this (incl. i-dots on printed text)
 LINE_CLUSTER_RATIO = 0.7            # join components within this * median_height of the line's running centroid
 MIN_LINE_HEIGHT = 10
 LINE_PAD = 6

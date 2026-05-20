@@ -69,7 +69,7 @@ CTC logits  (B, T=64, C=vocab+1)
 ## Inference path (no TensorFlow)
 
 ```
-PIL.Image or webcam snapshot
+PIL.Image (uploaded)
         |
         v
 (optional) src/preprocess.py         deskew / denoise / CLAHE / ...

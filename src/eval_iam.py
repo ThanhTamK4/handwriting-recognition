@@ -14,6 +14,8 @@ from typing import List, Tuple
 
 from PIL import Image
 
+from ._eval_utils import cer, exact_match
+
 DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "IAM_Words"
 WORDS_TXT = DATA_DIR / "words.txt"
 WORDS_DIR = DATA_DIR / "words"
@@ -73,6 +75,8 @@ def main():
 
     raw_correct = 0
     corrected_correct = 0
+    raw_cers: list[float] = []
+    corr_cers: list[float] = []
     for path, truth in samples:
         truth = truth.strip()
         if corrector is not None:
@@ -81,10 +85,12 @@ def main():
             result = rec.predict(Image.open(path))
         pred = result.text
         raw_pred = result.raw_text if result.raw_text is not None else pred
-        raw_ok = raw_pred == truth
-        corr_ok = pred == truth
+        raw_ok = exact_match(raw_pred, truth)
+        corr_ok = exact_match(pred, truth)
         raw_correct += int(raw_ok)
         corrected_correct += int(corr_ok)
+        raw_cers.append(cer(raw_pred, truth))
+        corr_cers.append(cer(pred, truth))
         if corrector is not None:
             tag = "++" if (corr_ok and not raw_ok) else (
                 "--" if (raw_ok and not corr_ok) else ("OK" if corr_ok else "  ")
@@ -98,12 +104,17 @@ def main():
             print(f"{mark} truth={truth!r:25} pred={pred!r:25} conf={result.confidence:.2f}")
 
     total = len(samples)
+    mean_corr_cer = sum(corr_cers) / len(corr_cers) if corr_cers else 0.0
     if corrector is not None:
-        print(f"\nraw:       {raw_correct}/{total} exact-match")
-        print(f"corrected: {corrected_correct}/{total} exact-match "
-              f"(delta {corrected_correct - raw_correct:+d})")
+        mean_raw_cer = sum(raw_cers) / len(raw_cers) if raw_cers else 0.0
+        print(f"\nraw:       {raw_correct}/{total} exact-match  |  CER {mean_raw_cer:.3f}")
+        print(
+            f"corrected: {corrected_correct}/{total} exact-match  "
+            f"|  CER {mean_corr_cer:.3f}  "
+            f"(delta {corrected_correct - raw_correct:+d})"
+        )
     else:
-        print(f"\n{corrected_correct}/{total} exact-match")
+        print(f"\n{corrected_correct}/{total} exact-match  |  CER {mean_corr_cer:.3f}")
 
 
 if __name__ == "__main__":

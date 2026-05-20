@@ -1,7 +1,11 @@
-"""Streamlit UI: upload image OR webcam snapshot -> TrOCR prediction.
+"""Streamlit UI: upload / draw / paste an image -> TrOCR / mltu CRNN prediction.
 
-Features:
-    - Upload + webcam tabs
+Three input tabs share the same recognition pipeline:
+    - File upload (PNG / JPG)
+    - Drawable canvas (live handwriting via mouse / stylus)
+    - URL or clipboard paste (data: URIs and http(s) image URLs)
+
+Plus:
     - Multi-line mode with line preview overlay
     - Optional preprocessing (deskew / denoise / contrast / binarize / perspective)
     - Confidence score
@@ -13,24 +17,44 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import numpy as np
 import streamlit as st
 from PIL import Image, ImageDraw
 
 # Make `src` importable when run via `streamlit run app/streamlit_app.py`
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import streamlit.components.v1 as components  # noqa: E402
+
+from src.loaders import (  # noqa: E402
+    ImageLoadError,
+    load_image_from_url,
+)
 from src.preprocess import PreprocessOptions, preprocess  # noqa: E402
 from src.recognizer import PredictionResult, Recognizer  # noqa: E402
 from src.segment import line_polygons, word_polygons  # noqa: E402
 
+# Self-contained drawable canvas. We ship our own minimal component instead
+# of `streamlit-drawable-canvas` because that package (last released 2023)
+# silently fails to render inside `st.tabs` on Streamlit >= 1.40 — the
+# iframe is created but lazy-mount collapses it to zero height.
+_CANVAS_DIR = Path(__file__).resolve().parent / "components" / "handwriting_canvas"
+_handwriting_canvas = components.declare_component(
+    "handwriting_canvas", path=str(_CANVAS_DIR)
+)
+
 TROCR_LABEL = "TrOCR (base handwritten)"
+TROCR_PRINTED_LABEL = "TrOCR (printed)"
 MLTU_LABEL = "mltu CRNN (IAM words)"
 
 
 @st.cache_resource(show_spinner="Loading TrOCR model (first run downloads ~1.4 GB)...")
 def _load_trocr() -> Recognizer:
     return Recognizer()
+
+
+@st.cache_resource(show_spinner="Loading TrOCR (printed) model (first run downloads ~1.4 GB)...")
+def _load_trocr_printed() -> Recognizer:
+    return Recognizer(model_name="microsoft/trocr-base-printed")
 
 
 @st.cache_resource(show_spinner="Loading mltu CRNN ONNX model...")
@@ -50,6 +74,8 @@ def _load_corrector():
 def get_recognizer(choice: str):
     if choice == MLTU_LABEL:
         return _load_mltu()
+    if choice == TROCR_PRINTED_LABEL:
+        return _load_trocr_printed()
     return _load_trocr()
 
 
@@ -202,9 +228,14 @@ with st.sidebar:
     st.header("Options")
     model_choice = st.selectbox(
         "Model",
-        options=[TROCR_LABEL, MLTU_LABEL],
+        options=[TROCR_LABEL, TROCR_PRINTED_LABEL, MLTU_LABEL],
         index=0,
-        help="TrOCR is line-level and strong on paragraphs. mltu CRNN is word-level, fast, and trained locally on IAM.",
+        help=(
+            "TrOCR (handwritten): line-level, strong on cursive paragraphs.  "
+            "TrOCR (printed): same architecture trained on printed text — use "
+            "for scanned documents.  "
+            "mltu CRNN: word-level, fast, trained locally on IAM cursive."
+        ),
     )
     multiline = st.checkbox(
         "Multi-line mode", value=False, help="Split image into horizontal lines."
@@ -230,7 +261,9 @@ with st.sidebar:
         binarize=st.checkbox("Binarize", value=False, disabled=not apply_preproc),
     )
 
-upload_tab, webcam_tab = st.tabs(["📁 Upload image", "📷 Webcam"])
+upload_tab, draw_tab, url_tab = st.tabs(
+    ["📁 Upload", "✏️ Draw", "🔗 URL / paste"]
+)
 
 with upload_tab:
     uploaded = st.file_uploader("Choose an image", type=["png", "jpg", "jpeg"])
@@ -241,14 +274,97 @@ with upload_tab:
             st.error(f"Could not open image: {e}")
         else:
             st.image(image, caption="Input", use_container_width=True)
-            run_pipeline(image, model_choice, multiline, apply_preproc, opts, key_prefix="upload", apply_correction=apply_correction)
+            run_pipeline(
+                image,
+                model_choice,
+                multiline,
+                apply_preproc,
+                opts,
+                key_prefix="upload",
+                apply_correction=apply_correction,
+            )
 
-with webcam_tab:
-    snapshot = st.camera_input("Take a photo of handwriting")
-    if snapshot is not None:
+with draw_tab:
+    st.caption(
+        "Draw with your mouse, stylus, or finger. Click **Use this drawing** "
+        "in the canvas toolbar to send it to the recognizer."
+    )
+    # The component returns the most recent PNG data URL the user submitted,
+    # or None if nothing has been clicked yet. We re-run on every rerun
+    # (matching the upload tab) so the result panel survives unrelated
+    # widget changes; the recognizer is the only expensive step and a hash
+    # of the URL would still be re-decoded each time anyway.
+    canvas_data_url = _handwriting_canvas(key="canvas", default=None)
+    if (
+        canvas_data_url
+        and isinstance(canvas_data_url, str)
+        and canvas_data_url.startswith("data:image/")
+    ):
         try:
-            image = Image.open(snapshot)
-        except Exception as e:
-            st.error(f"Could not read snapshot: {e}")
+            image = load_image_from_url(canvas_data_url)
+        except ImageLoadError as e:
+            st.error(str(e))
         else:
-            run_pipeline(image, model_choice, multiline, apply_preproc, opts, key_prefix="webcam", apply_correction=apply_correction)
+            run_pipeline(
+                image,
+                model_choice,
+                multiline,
+                apply_preproc,
+                opts,
+                key_prefix="draw",
+                apply_correction=apply_correction,
+            )
+
+with url_tab:
+    # Two parallel inputs in this tab: paste from system clipboard (via the
+    # paste-button component) and paste/type a URL. The clipboard component
+    # is optional — we fall back gracefully if the plugin isn't installed.
+    paste_result = None
+    try:
+        from streamlit_paste_button import paste_image_button
+    except ImportError:
+        st.caption(
+            "Tip: install `streamlit-paste-button` to enable clipboard paste."
+        )
+    else:
+        paste_result = paste_image_button(
+            label="📋 Paste image from clipboard",
+            key="paste_btn",
+            errors="ignore",
+        )
+
+    pasted_image: Image.Image | None = None
+    if paste_result is not None and getattr(paste_result, "image_data", None) is not None:
+        pasted_image = paste_result.image_data
+        if pasted_image.mode != "RGB":
+            pasted_image = pasted_image.convert("RGB")
+
+    url = st.text_input(
+        "…or paste an image URL / data URI",
+        key="url_input",
+        placeholder="https://example.com/note.png  or  data:image/png;base64,…",
+    )
+
+    url_image: Image.Image | None = None
+    if url:
+        try:
+            with st.spinner("Fetching image…"):
+                url_image = load_image_from_url(url)
+        except ImageLoadError as e:
+            st.error(str(e))
+
+    # Recognize whichever was provided most recently. If both arrived in
+    # the same rerun, prefer the clipboard paste — it's the more "fresh"
+    # gesture and the URL field is sticky between reruns.
+    image = pasted_image or url_image
+    if image is not None:
+        st.image(image, caption="Input", use_container_width=True)
+        run_pipeline(
+            image,
+            model_choice,
+            multiline,
+            apply_preproc,
+            opts,
+            key_prefix="url",
+            apply_correction=apply_correction,
+        )

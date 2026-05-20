@@ -7,7 +7,7 @@ path: src/preprocess.py
 
 # preprocess.py
 
-Image cleanup pipeline for webcam / phone-photographed handwriting. Each stage is optional, gated by `PreprocessOptions`.
+Image cleanup pipeline for phone-photographed or scanned handwriting. Each stage is optional, gated by `PreprocessOptions`.
 
 ## Pipeline order
 

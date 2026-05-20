@@ -6,6 +6,9 @@ pillow
 opencv-python
 numpy
 streamlit>=1.20
+streamlit-paste-button>=0.1
+requests>=2.28
 onnxruntime
 pyyaml
 symspellpy>=6.7
+pytest>=7.0

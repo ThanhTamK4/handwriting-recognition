@@ -14,6 +14,10 @@ aliases: [TrOCR, trocr-base-handwritten]
 - Line-level recognition (expects whole sentences/phrases, not isolated words)
 - Internal language model via beam-search decoder — **do not add external NLP post-correction**
 - Zero training required for the project
+- Available as **two sibling checkpoints** that share the architecture:
+  - `microsoft/trocr-base-handwritten` — cursive/handwritten
+  - `microsoft/trocr-base-printed` — printed text / scanned documents
+  Both load through the same `Recognizer(model_name=...)` constructor in [[recognizer.py]].
 
 ## Strengths
 
@@ -30,6 +34,12 @@ See [[TrOCR vs mltu]] for numbers.
 ## Used by
 
 - [[recognizer.py]] → [[Inference Pipeline]]
+- Streamlit exposes **two TrOCR options** in the model dropdown:
+  - *TrOCR (base handwritten)* — default, for cursive
+  - *TrOCR (printed)* — for scanned documents
+
+  The English-dictionary correction checkbox auto-disables for both TrOCR
+  variants since their internal LM decoder handles language priors.
 
 ## Related
 

@@ -1,7 +1,7 @@
 # Handwriting Recognition
 
 A Python handwriting recognition app with two interchangeable model backends
-and a Streamlit web UI featuring image upload and webcam scanning.
+and a Streamlit web UI for image upload.
 
 Trained and evaluated on the [IAM Handwriting Dataset](https://fki.tic.heia-fr.ch/databases/iam-handwriting-database)
 (word-level subset from Kaggle).
@@ -11,9 +11,10 @@ Trained and evaluated on the [IAM Handwriting Dataset](https://fki.tic.heia-fr.c
 - **Two recognizer backends** — switch in the sidebar at runtime:
   - **TrOCR** (`microsoft/trocr-base-handwritten`) — pretrained, line-level, zero training required
   - **mltu CRNN** — CNN + BiLSTM + CTC trained locally on IAM_Words, exported to ONNX (~10 MB, ~20 ms/word)
-- **Streamlit web app** with two input tabs:
+- **Streamlit web app** with three input tabs:
   - Upload image (PNG / JPG)
-  - Webcam snapshot (`st.camera_input`)
+  - Drawable canvas (write live with mouse / stylus / finger)
+  - URL / clipboard paste (`http(s)://...` URLs, `data:image/...` URIs, or system clipboard via paste button)
 - **Multi-line mode** — splits paragraphs into lines (and words for CRNN) automatically
 - **Image preprocessing** sidebar — deskew, denoise, contrast enhancement, perspective correction, binarize
 - **Confidence scoring** — per-prediction and per-line, shown as color-coded badges
@@ -37,8 +38,7 @@ streamlit run app/streamlit_app.py
 ```
 
 First launch downloads ~1.4 GB of TrOCR weights (one-time). Select
-**"TrOCR (base handwritten)"** in the sidebar and upload an image or use the
-webcam tab.
+**"TrOCR (base handwritten)"** in the sidebar and upload an image.
 
 ### 3. (Optional) Train the mltu CRNN backend
 
@@ -73,13 +73,18 @@ then reports exact-match count.
 ```
 handwriting/
 ├── app/
-│   └── streamlit_app.py            # Streamlit UI (upload + webcam + model selector)
+│   ├── streamlit_app.py            # Streamlit UI (upload / draw / paste + model selector)
+│   └── components/
+│       └── handwriting_canvas/     # self-contained HTML5 canvas component
 ├── src/
 │   ├── recognizer.py               # TrOCR backend (predict, predict_lines, PredictionResult)
 │   ├── mltu_recognizer.py          # mltu CRNN ONNX backend (same interface)
 │   ├── segment.py                  # OpenCV line/word segmentation
 │   ├── preprocess.py               # deskew, denoise, CLAHE, perspective, binarize
+│   ├── loaders.py                  # URL / data-URI / canvas image helpers
 │   └── eval_iam.py                 # IAM word-level evaluation script
+├── tests/
+│   └── test_loaders.py             # unit tests for src.loaders (run with `pytest`)
 ├── training/
 │   ├── train_mltu.py               # CRNN training script (TF 2.10 + mltu)
 │   ├── requirements-train.txt      # isolated training dependencies
@@ -107,7 +112,7 @@ handwriting/
 | Training required | No | Yes (~hours CPU) |
 | Input unit | Full line | Single word |
 | Multi-line | Native (line-level model) | Via segmentation pipeline |
-| Best for | Paragraphs, webcam photos | Single words, fast scanning |
+| Best for | Paragraphs, phone photos | Single words, fast scanning |
 
 See [`docs/MODELS.md`](docs/MODELS.md) for detailed logical maps and pipeline
 diagrams of both backends.
@@ -120,7 +125,7 @@ Available in the Streamlit sidebar under "Preprocessing":
 |---|---|---|
 | Perspective correction | Detects page quad, warps to flat rectangle | Tilted full-page photos |
 | Deskew | Rotates text to horizontal baseline | Slightly rotated scans |
-| Denoise | Bilateral filter (preserves edges) | Grainy phone/webcam shots |
+| Denoise | Bilateral filter (preserves edges) | Grainy phone shots |
 | Enhance contrast | CLAHE (adaptive histogram equalization) | Faint pencil, uneven lighting |
 | Binarize | Adaptive threshold to pure black/white | Heavily stained paper (last resort) |
 

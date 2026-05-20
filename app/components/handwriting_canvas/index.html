@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>handwriting_canvas</title>
+<style>
+  /* Self-contained styles — Streamlit's theme CSS does NOT bleed into the
+     component iframe, so we have to repaint the look locally instead of
+     relying on inherited variables. Kept narrow + boring on purpose. */
+  :root {
+    color-scheme: light dark;
+  }
+  body {
+    margin: 0;
+    padding: 8px 4px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: transparent;
+    color: #cccccc;
+  }
+  #toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+  #toolbar button {
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid #555;
+    background: #1f1f1f;
+    color: #eaeaea;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  #toolbar button:hover { background: #2a2a2a; }
+  #toolbar input[type=range] { width: 110px; }
+  #canvas-wrap {
+    border: 1px solid #444;
+    border-radius: 8px;
+    display: inline-block;
+    background: #ffffff;
+    overflow: hidden;
+  }
+  #pad {
+    display: block;
+    /* Cursor signals "draw here" without needing a tooltip. */
+    cursor: crosshair;
+    touch-action: none; /* keep mobile from scrolling on drag */
+  }
+  #status {
+    margin-top: 6px;
+    font-size: 12px;
+    opacity: 0.7;
+    min-height: 1em;
+  }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <label>Stroke
+    <input id="stroke" type="range" min="1" max="14" value="4">
+    <span id="stroke-val">4</span>
+  </label>
+  <button id="clear" type="button">Clear</button>
+  <button id="submit" type="button">Use this drawing</button>
+</div>
+<div id="canvas-wrap">
+  <canvas id="pad" width="720" height="240"></canvas>
+</div>
+<div id="status"></div>
+
+<script>
+/*
+ * Streamlit custom-component message protocol (in-line so we don't need to
+ * bundle the official `streamlit-component-lib` npm package). All we use:
+ *   - postMessage({ type: "streamlit:setComponentReady", apiVersion: 1 })
+ *   - postMessage({ type: "streamlit:setFrameHeight", height: <px> })
+ *   - postMessage({ type: "streamlit:setComponentValue", value: <data-url>, dataType: "json" })
+ *   - listen for { type: "streamlit:render", args: {...} } messages from the host
+ *
+ * This protocol has been stable since Streamlit 0.63 and is what
+ * `declare_component` expects. Keeping it inline trades a few extra lines
+ * for not having to maintain a node_modules tree.
+ */
+const sendToStreamlit = (msg) => {
+  window.parent.postMessage({ isStreamlitMessage: true, ...msg }, "*");
+};
+
+const setFrameHeight = (h) => sendToStreamlit({ type: "streamlit:setFrameHeight", height: h });
+const setValue = (v) => sendToStreamlit({
+  type: "streamlit:setComponentValue",
+  value: v,
+  dataType: "json",
+});
+
+const canvas = document.getElementById("pad");
+const ctx = canvas.getContext("2d", { willReadFrequently: true });
+const strokeInput = document.getElementById("stroke");
+const strokeLabel = document.getElementById("stroke-val");
+const status = document.getElementById("status");
+
+function paintBackground() {
+  // Filling instead of relying on CSS background lets the exported PNG
+  // include the white sheet — the recognizer needs black-on-white pixels,
+  // not black-on-transparent.
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+paintBackground();
+ctx.lineCap = "round";
+ctx.lineJoin = "round";
+ctx.strokeStyle = "#000000";
+ctx.lineWidth = parseInt(strokeInput.value, 10);
+
+let drawing = false;
+let dirty = false;
+let lastX = 0;
+let lastY = 0;
+
+function pointerXY(e) {
+  const rect = canvas.getBoundingClientRect();
+  // CSS may scale the canvas; map back to the canvas's native coordinate
+  // system so a 4 px stroke stays 4 px no matter the viewport zoom.
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY,
+  };
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  drawing = true;
+  canvas.setPointerCapture(e.pointerId);
+  const { x, y } = pointerXY(e);
+  lastX = x;
+  lastY = y;
+  // Dot at click position so a single click still draws something (a stray
+  // 'i' dot, a punctuation mark, etc.).
+  ctx.beginPath();
+  ctx.arc(x, y, ctx.lineWidth / 2, 0, Math.PI * 2);
+  ctx.fillStyle = "#000000";
+  ctx.fill();
+  dirty = true;
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!drawing) return;
+  const { x, y } = pointerXY(e);
+  ctx.beginPath();
+  ctx.moveTo(lastX, lastY);
+  ctx.lineTo(x, y);
+  ctx.stroke();
+  lastX = x;
+  lastY = y;
+  dirty = true;
+});
+
+const endStroke = (e) => {
+  if (!drawing) return;
+  drawing = false;
+  try { canvas.releasePointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+};
+canvas.addEventListener("pointerup", endStroke);
+canvas.addEventListener("pointercancel", endStroke);
+canvas.addEventListener("pointerleave", endStroke);
+
+strokeInput.addEventListener("input", () => {
+  const w = parseInt(strokeInput.value, 10);
+  ctx.lineWidth = w;
+  strokeLabel.textContent = w;
+});
+
+document.getElementById("clear").addEventListener("click", () => {
+  paintBackground();
+  dirty = false;
+  status.textContent = "Canvas cleared.";
+});
+
+document.getElementById("submit").addEventListener("click", () => {
+  if (!dirty) {
+    status.textContent = "Nothing drawn yet.";
+    return;
+  }
+  // toDataURL is synchronous and runs inside the iframe — perfectly fine
+  // for a 720x240 canvas (~50 KB PNG, ~70 KB base64). Sending it as the
+  // component value lets Streamlit pass it straight to load_image_from_url.
+  const dataUrl = canvas.toDataURL("image/png");
+  setValue(dataUrl);
+  status.textContent = "Sent to recognizer.";
+});
+
+// Streamlit handshake. We ignore the render args (no inputs from Python yet)
+// but still listen so the host considers the component fully connected.
+window.addEventListener("message", (event) => {
+  if (event.data?.type === "streamlit:render") {
+    // No-op: the canvas is fully driven client-side.
+  }
+});
+
+sendToStreamlit({ type: "streamlit:componentReady", apiVersion: 1 });
+// Pad the reported height a touch so the toolbar/status text don't get
+// clipped by the iframe boundary on dense themes.
+setFrameHeight(canvas.height + 96);
+</script>
+</body>
+</html>

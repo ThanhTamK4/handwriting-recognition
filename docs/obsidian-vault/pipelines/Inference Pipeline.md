@@ -9,10 +9,10 @@ aliases: [Inference Pipeline, Recognition Pipeline]
 End-to-end flow from user input to prediction in [[streamlit_app.py]].
 
 ```
-[Upload PNG/JPG]   [Webcam snapshot]
-         \           /
-          ▼         ▼
-   PIL.Image.open(bytes)
+[Upload PNG/JPG]   [Drawable canvas]   [URL / clipboard paste]
+         \              |                       /
+          ▼             ▼                      ▼
+   PIL.Image (via PIL.Image.open or src.loaders helpers)
           ↓
    [[preprocess.py]] (optional: perspective, deskew, denoise, CLAHE, binarize)
           ↓

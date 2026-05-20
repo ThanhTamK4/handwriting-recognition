@@ -1,4 +1,4 @@
-"""Image preprocessing for real-world / webcam handwriting photos.
+"""Image preprocessing for real-world handwriting photos / scans.
 
 Pipeline (configurable):
     perspective -> deskew -> grayscale+denoise -> adaptive threshold -> invert-if-needed
@@ -83,13 +83,24 @@ def _perspective_correct(bgr: np.ndarray) -> np.ndarray | None:
     contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
 
+    frame_area = float(h * w)
     quad = None
     for c in contours:
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-        if len(approx) == 4 and cv2.contourArea(approx) > 0.2 * h * w:
-            quad = approx.reshape(4, 2).astype("float32")
-            break
+        if len(approx) != 4:
+            continue
+        area = cv2.contourArea(approx)
+        if area <= 0.2 * frame_area:
+            continue
+        # Reject "the whole frame": if the candidate covers nearly the entire
+        # input, it isn't a *page inside the frame* — it's just the frame
+        # outline. Skip it so the caller's perspective toggle no-ops instead
+        # of producing a meaningless full-frame warp.
+        if area >= 0.92 * frame_area:
+            continue
+        quad = approx.reshape(4, 2).astype("float32")
+        break
     if quad is None:
         return None
 
@@ -102,6 +113,12 @@ def _perspective_correct(bgr: np.ndarray) -> np.ndarray | None:
     max_w = int(max(width_a, width_b))
     max_h = int(max(height_a, height_b))
     if max_w < 50 or max_h < 50:
+        return None
+    # Aspect-ratio sanity. A real page is roughly 0.5–2.0; we allow up to 5.0
+    # to cover landscape pages + extreme perspective skew without admitting
+    # the wood-paneling-strip-plus-page failure mode we hit in live testing.
+    ratio = max(max_w, max_h) / max(1, min(max_w, max_h))
+    if ratio > 5.0:
         return None
 
     dst = np.array(

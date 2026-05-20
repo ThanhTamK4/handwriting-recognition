@@ -40,6 +40,7 @@ Open the **Graph View** (Ctrl/Cmd + G) to see the full network. Nodes are color-
 - [[Drive I O Bottleneck]] — 17 s/step fix
 - [[Keras3 Compatibility]] — Permute + Rescaling swap
 - [[CTC Not Enough Time]] — timestep vs label-length
+- [[Cross-Dataset Generalization]] — mltu 0/100 + TrOCR 8/100 on out-of-domain data
 
 ## External docs
 

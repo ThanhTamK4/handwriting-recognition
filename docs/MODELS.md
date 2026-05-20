@@ -9,7 +9,7 @@ actually does at inference time.
 ## 1. TrOCR (`microsoft/trocr-base-handwritten`)
 
 **Role:** line-level, pretrained, zero training required, heavyweight (~1.4 GB).
-Best on paragraphs, multi-word photos, webcam shots.
+Best on paragraphs and multi-word phone photos.
 
 ### Inference route
 
@@ -177,7 +177,7 @@ Dense(vocab+1, softmax)          -> (64, 80)    # 79 chars + CTC blank
 ```mermaid
 flowchart TD
     subgraph Shared
-        U[user image / webcam snapshot]
+        U[user image upload]
         P[src/preprocess.py<br/>optional]
         R[PredictionResult]
         V[Streamlit render<br/>badge + copy]
@@ -210,7 +210,7 @@ flowchart TD
 
 | Scenario | Pick |
 |---|---|
-| Paragraph photo, webcam | **TrOCR** |
+| Paragraph photo, phone scan | **TrOCR** |
 | Tilted / crowded / messy handwriting | **TrOCR** (more robust) |
 | Single word flashcards | **mltu CRNN** (faster, in-distribution) |
 | IAM_Words benchmark / word-level accuracy | **mltu CRNN** |
